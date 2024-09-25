@@ -1,7 +1,14 @@
 //! Parse Discord MarkDown into an AST
 
-use nom::{IResult, Slice, branch::alt, bytes::complete::{is_not, tag, take_until}, combinator::{cond, map_opt, map_parser, recognize}, regex::Regex, sequence::{delimited, pair, preceded, terminated}};
 use lazy_static::lazy_static;
+use nom::{
+    branch::alt,
+    bytes::complete::{is_not, tag, take_until},
+    combinator::{cond, map_opt, map_parser, recognize},
+    sequence::{delimited, pair, preceded, terminated},
+    IResult, Slice,
+};
+use nom_regex::lib::regex::Regex;
 
 /// Enum to represent the AST
 #[derive(Debug, PartialEq)]
@@ -28,14 +35,16 @@ lazy_static! {
     static ref USER_RE: Regex = Regex::new(r"^<@!?(\d+)(>)").unwrap();
     static ref ROLE_RE: Regex = Regex::new(r"^<@&(\d+)(>)").unwrap();
     static ref CHANNEL_RE: Regex = Regex::new(r"^<#(\d+)(>)").unwrap();
-    static ref LINK_RE: Regex = Regex::new(r"^(https?|ftp|file)(://[-A-Za-z0-9+&@#/%?=~_|!:,.;]*[A-Za-z0-9+&@#/%=~_|])").unwrap();
+    static ref LINK_RE: Regex =
+        Regex::new(r"^(https?|ftp|file)(://[-A-Za-z0-9+&@#/%?=~_|!:,.;]*[A-Za-z0-9+&@#/%=~_|])")
+            .unwrap();
 }
 
 // Re-implement re_capture from nom, but make it take &'a Regex instead of Regex
 // This provides a noticeable speed improvement since we don't have to RE.clone() each time
 fn re_capture<'a, E>(re: &'a Regex) -> impl Fn(&'a str) -> IResult<&'a str, Vec<&'a str>, E>
-    where
-        E: nom::error::ParseError<&'a str>,
+where
+    E: nom::error::ParseError<&'a str>,
 {
     move |i| {
         if let Some(c) = re.captures(i) {
@@ -51,7 +60,10 @@ fn re_capture<'a, E>(re: &'a Regex) -> impl Fn(&'a str) -> IResult<&'a str, Vec<
             };
             Ok((i.slice(offset..), v))
         } else {
-            Err(nom::Err::Error(E::from_error_kind(i, nom::error::ErrorKind::RegexpCapture)))
+            Err(nom::Err::Error(E::from_error_kind(
+                i,
+                nom::error::ErrorKind::RegexpCapture,
+            )))
         }
     }
 }
@@ -60,7 +72,13 @@ fn re_capture<'a, E>(re: &'a Regex) -> impl Fn(&'a str) -> IResult<&'a str, Vec<
 fn custom_emoji<'a>(input: &'a str) -> IResult<&str, Expression<'a>> {
     let (input, custom_emoji) = re_capture(&CUSTOM_EMOJI_RE)(input)?;
     let extension = if custom_emoji[1] == "a" { "gif" } else { "png" };
-    Ok((input, Expression::CustomEmoji(custom_emoji[2], format!("{}.{}", custom_emoji[3], extension))))
+    Ok((
+        input,
+        Expression::CustomEmoji(
+            custom_emoji[2],
+            format!("{}.{}", custom_emoji[3], extension),
+        ),
+    ))
 }
 
 // Parses user mentions
@@ -101,10 +119,14 @@ fn md_hyperlink<'a>(input: &'a str) -> IResult<&str, Expression<'a>> {
         hyperlink_internals,
         pair(
             delimited(tag("["), take_until("]"), tag("]")),
-            delimited(tag("("), |input| {
-                let x = hyperlink_internals(input)?;
-                Ok((x.0, x.1.0))
-            }, tag(")"))
+            delimited(
+                tag("("),
+                |input| {
+                    let x = hyperlink_internals(input)?;
+                    Ok((x.0, x.1 .0))
+                },
+                tag(")"),
+            ),
         ),
     ))(input)?;
     Ok((input, Expression::Hyperlink(hyperlink.0, hyperlink.1)))
@@ -126,14 +148,17 @@ fn inline_code<'a>(input: &'a str) -> IResult<&str, Expression<'a>> {
 }
 
 fn blockquote<'a>(input: &'a str) -> IResult<&str, Expression<'a>> {
-    let (input, blockquote) = map_parser(alt((
-        // Blockquote until end of line
-        delimited(tag("> "), is_not("\n"), tag("\n")),
-        // Special case for `> \n`
-        preceded(tag("> "), tag("\n")),
-        // Blockquote until end of file
-        preceded(tag("> "), is_not("\n")),
-    )), parse_section)(input)?;
+    let (input, blockquote) = map_parser(
+        alt((
+            // Blockquote until end of line
+            delimited(tag("> "), is_not("\n"), tag("\n")),
+            // Special case for `> \n`
+            preceded(tag("> "), tag("\n")),
+            // Blockquote until end of file
+            preceded(tag("> "), is_not("\n")),
+        )),
+        parse_section,
+    )(input)?;
     Ok((input, Expression::Blockquote(blockquote)))
 }
 
@@ -223,7 +248,11 @@ fn apply_parsers(
         user,
         role,
         channel,
-        if md_hyperlinks {md_hyperlink} else {hyperlink},
+        if md_hyperlinks {
+            md_hyperlink
+        } else {
+            hyperlink
+        },
         multiline_code,
         inline_code,
         spoiler,
@@ -277,7 +306,9 @@ fn parse_internals<'a>(
                 input = &input[char_pos + c.len_utf8()..];
                 continue 'outer;
             }
-            if let Ok((remaining, expr)) = apply_parsers(allow_blockquote, md_hyperlinks, &input[i..]) {
+            if let Ok((remaining, expr)) =
+                apply_parsers(allow_blockquote, md_hyperlinks, &input[i..])
+            {
                 // Don't reset blockquote if we just matched on a blockquote because it consumes a
                 // succeeding newline if it exists, and if it doesn't, `allow_blockquote` doesn't
                 // matter anyway
